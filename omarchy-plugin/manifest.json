@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "tcballard.surfacecheck",
+  "name": "SurfaceCheck",
+  "version": "0.1.0",
+  "author": "tcballard",
+  "description": "Local, evidence-backed visual inspection for Omarchy surfaces.",
+  "kinds": ["menu", "panel", "overlay"],
+  "entryPoints": {
+    "menu": "qml/Menu.qml",
+    "panel": "qml/Panel.qml",
+    "overlay": "qml/Overlay.qml"
+  },
+  "keepLoaded": true
+}
