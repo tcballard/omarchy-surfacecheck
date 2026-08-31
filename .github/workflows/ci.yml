@@ -1,0 +1,32 @@
+name: SurfaceCheck verification
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Verify formatting
+        run: cargo fmt --all -- --check
+      - name: Run tests
+        run: cargo test --workspace --locked
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Build documentation
+        run: cargo doc --workspace --no-deps --locked
+      - name: Validate plugin contract
+        run: python3 scripts/validate_plugin.py omarchy-plugin
+      - name: Scan source for accidental secrets
+        run: |
+          ! grep -RInE --exclude-dir=.git --exclude-dir=target \
+            '(AKIA[0-9A-Z]{16}|-----BEGIN (RSA|OPENSSH|EC|DSA) PRIVATE KEY-----|gh[pousr]_[A-Za-z0-9_]{20,})' .
