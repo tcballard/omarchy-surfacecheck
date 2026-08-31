@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "sessionId": "session-1",
+  "createdAt": 1700000000000,
+  "captures": [
+    {
+      "captureId": "capture-1",
+      "captureType": "window",
+      "capturedAt": 1700000000000,
+      "image": {
+        "relativePath": "captures/capture-1.png",
+        "bytes": 128,
+        "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "dimensions": {
+        "width": 800,
+        "height": 600
+      },
+      "scale": {
+        "x": 1.25,
+        "y": 1.25
+      },
+      "selection": null,
+      "toolVersions": [
+        {
+          "name": "grim",
+          "version": "1.5.0"
+        }
+      ],
+      "application": null
+    }
+  ],
+  "userNote": "Check the panel spacing",
+  "deterministicFindings": [
+    {
+      "findingId": "det-1",
+      "category": "contrast_measurement",
+      "severity": "info",
+      "evidence": [
+        {
+          "captureId": "capture-1",
+          "region": {
+            "x": 10,
+            "y": 20,
+            "width": 100,
+            "height": 80
+          }
+        }
+      ],
+      "explanation": "Measured luminance range is recorded for review.",
+      "code": "contrast_measurement",
+      "measurement": 0.42
+    }
+  ],
+  "agentFindings": [
+    {
+      "findingId": "agent-1",
+      "category": "layout",
+      "severity": "medium",
+      "evidence": [
+        {
+          "captureId": "capture-1",
+          "region": {
+            "x": 10,
+            "y": 20,
+            "width": 100,
+            "height": 80
+          }
+        }
+      ],
+      "explanation": "The selected panel is visibly misaligned.",
+      "confidence": 0.75,
+      "suggestedNextAction": "Inspect the panel alignment rules."
+    }
+  ],
+  "comparison": null,
+  "beforeAfter": null,
+  "provenance": {
+    "kind": "local_capture",
+    "producer": "surfacecheck-test",
+    "producerVersion": "0.1.0",
+    "producerCommit": "test-commit",
+    "toolVersions": [
+      {
+        "name": "surfacecheck",
+        "version": "0.1.0"
+      }
+    ]
+  }
+}
