@@ -247,6 +247,12 @@ fn framing_and_prompt_limits_are_explicit() {
         capture_id: "capture-1".to_owned(),
         prompt: "x".repeat(MAX_AGENT_PROMPT_BYTES + 1),
         evidence: vec![valid_evidence("capture-1")],
+        consent: surfacecheck_core::ConsentRecord {
+            acknowledged: true,
+            local_only: true,
+            disclosure: "The selected local evidence will be reviewed by the configured agent."
+                .into(),
+        },
         provenance: valid_provenance(ProvenanceKind::AgentReview),
     };
     assert!(request.validate().is_err());

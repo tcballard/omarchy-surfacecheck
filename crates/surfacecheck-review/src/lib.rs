@@ -1,5 +1,8 @@
 //! Review facts that can be computed without a model or a network.
 
+mod agent;
+mod premonition;
+
 use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::fmt;
@@ -7,6 +10,16 @@ use surfacecheck_capture::DecodedPng;
 use surfacecheck_core::{
     ComparisonRecord, DeterministicCategory, DeterministicFinding, Dimensions, EvidenceRef,
     EvidenceRegion, Scale, Severity, Validate,
+};
+
+pub use agent::{
+    AgentAdapter, AgentAdapterError, AgentReviewContext, AgentReviewError, CancellationToken,
+    CaptureContext, MockAgentAdapter, MockAgentBehavior, ReviewCoordinator,
+    AGENT_ADAPTER_PROTOCOL_VERSION,
+};
+pub use premonition::{
+    MockPremonitionAdapter, MockPremonitionBehavior, PremonitionAdapter, PremonitionAdapterError,
+    PremonitionCoordinator, PremonitionHandoffError,
 };
 
 pub const MAX_REVIEW_PIXELS: u64 = 100_000_000;

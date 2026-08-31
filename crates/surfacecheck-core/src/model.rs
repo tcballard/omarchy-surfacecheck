@@ -24,8 +24,10 @@ pub const MAX_EVIDENCE_REFS: usize = 16;
 pub const MAX_AGENT_PROMPT_BYTES: usize = 64 * 1024;
 pub const MAX_AGENT_RESPONSE_BYTES: usize = 1024 * 1024;
 pub const MAX_SUGGESTED_ACTION_BYTES: usize = 4 * 1024;
+pub const MAX_DISCLOSURE_BYTES: usize = 4 * 1024;
 pub const MAX_ERROR_MESSAGE_BYTES: usize = 4 * 1024;
 pub const MAX_ARCHIVE_PATH_BYTES: usize = 256;
+pub const PREMONITION_PROTOCOL_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationError {
@@ -1022,6 +1024,31 @@ impl Validate for ReviewRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConsentRecord {
+    pub acknowledged: bool,
+    pub local_only: bool,
+    pub disclosure: String,
+}
+
+impl Validate for ConsentRecord {
+    fn validate(&self) -> Result<(), ValidationError> {
+        if !self.acknowledged {
+            return Err(ValidationError::new(
+                "consent.acknowledged",
+                "explicit acknowledgement is required",
+            ));
+        }
+        validate_text(
+            &self.disclosure,
+            "consent.disclosure",
+            MAX_DISCLOSURE_BYTES,
+            false,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompareRequest {
     pub before_capture_id: String,
     pub after_capture_id: String,
@@ -1144,6 +1171,7 @@ pub struct AgentReviewRequest {
     pub capture_id: String,
     pub prompt: String,
     pub evidence: Vec<EvidenceRef>,
+    pub consent: ConsentRecord,
     pub provenance: Provenance,
 }
 
@@ -1157,6 +1185,7 @@ impl Validate for AgentReviewRequest {
         for evidence in &self.evidence {
             evidence.validate()?;
         }
+        self.consent.validate()?;
         self.provenance.validate()
     }
 }
@@ -1187,7 +1216,11 @@ impl Validate for AgentReviewResponse {
                 "response",
                 "success cannot carry an error",
             )),
-            (_, Some(error)) => error.validate(),
+            (_, Some(error)) if self.findings.is_empty() => error.validate(),
+            (_, Some(_)) => Err(ValidationError::new(
+                "response.findings",
+                "non-success responses cannot carry findings",
+            )),
             (_, None) => Err(ValidationError::new(
                 "response",
                 "non-success requires an error",
@@ -1238,6 +1271,7 @@ pub struct PremonitionHandoffRequest {
     pub handoff_id: String,
     pub adapter_protocol_version: u16,
     pub defect: DefectEnvelope,
+    pub consent: ConsentRecord,
 }
 
 impl Validate for PremonitionHandoffRequest {
@@ -1250,7 +1284,8 @@ impl Validate for PremonitionHandoffRequest {
                 "must be positive",
             ));
         }
-        self.defect.validate()
+        self.defect.validate()?;
+        self.consent.validate()
     }
 }
 

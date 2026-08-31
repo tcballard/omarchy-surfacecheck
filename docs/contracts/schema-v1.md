@@ -37,12 +37,16 @@ rejects rectangles outside its dimensions.
 ## Agent and handoff contracts
 
 `AgentReviewRequest` is an explicit, local evidence selection with a bounded
-prompt. `AgentReviewResponse` reports a status and bounded `AgentFinding` list;
-it cannot silently turn a non-success into an empty successful review.
-`PremonitionHandoffRequest` carries a versioned adapter protocol and a strict
-`DefectEnvelope`; `PremonitionHandoffResponse` only succeeds with an external
-reference. The adapter is therefore mockable and unavailable without inventing
-a production Premonition protocol.
+prompt and a consent record. The consent must acknowledge that the selected
+evidence is reviewed locally; requests marked for external processing are
+rejected by the review coordinator. `AgentReviewResponse` reports a status and
+bounded `AgentFinding` list; failures cannot carry findings and malformed or
+out-of-context model output is rejected as a whole.
+`PremonitionHandoffRequest` carries protocol version 1, a strict
+`DefectEnvelope`, and a separate explicit external-consent record.
+`PremonitionHandoffResponse` only succeeds with an external reference. The
+adapter is therefore mockable and unavailable without inventing a production
+Premonition protocol.
 
 ## Bounds and reproducibility
 
