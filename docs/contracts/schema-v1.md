@@ -56,4 +56,3 @@ timestamps and IDs, `to_canonical_json` emits byte-identical JSON. The fixture
 `tests/fixtures/valid_manifest.json` is a round-trip example; hostile-input
 tests cover unknown fields, enums, bounds, non-finite values, duplicate IDs,
 out-of-bounds coordinates, status-shape violations, and broken references.
-
