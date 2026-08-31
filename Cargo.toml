@@ -1,5 +1,9 @@
 [workspace]
-members = ["crates/surfacecheck-core", "crates/surfacecheck-capture"]
+members = [
+    "crates/surfacecheck-core",
+    "crates/surfacecheck-capture",
+    "crates/surfacecheck-store",
+]
 resolver = "2"
 
 [workspace.package]
