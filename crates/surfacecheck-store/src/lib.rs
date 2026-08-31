@@ -851,6 +851,17 @@ mod tests {
         .expect("fixture");
         manifest.captures[0].image.bytes = u64::try_from(image.len()).expect("test image length");
         manifest.captures[0].image.sha256 = sha256_hex(image);
+        let checksum = manifest.captures[0].image.sha256.clone();
+        for finding in &mut manifest.deterministic_findings {
+            for evidence in &mut finding.evidence {
+                evidence.content_sha256 = checksum.clone();
+            }
+        }
+        for finding in &mut manifest.agent_findings {
+            for evidence in &mut finding.evidence {
+                evidence.content_sha256 = checksum.clone();
+            }
+        }
         to_canonical_json(&manifest).expect("manifest validates")
     }
 

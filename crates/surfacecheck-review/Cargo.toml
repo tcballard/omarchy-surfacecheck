@@ -1,0 +1,12 @@
+[package]
+name = "surfacecheck-review"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Deterministic visual findings and before/after comparison"
+
+[dependencies]
+sha2.workspace = true
+surfacecheck-capture = { path = "../surfacecheck-capture" }
+surfacecheck-core = { path = "../surfacecheck-core" }
+

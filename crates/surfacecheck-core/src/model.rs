@@ -578,12 +578,14 @@ impl Validate for ImageEvidence {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceRef {
     pub capture_id: String,
+    pub content_sha256: String,
     pub region: EvidenceRegion,
 }
 
 impl Validate for EvidenceRef {
     fn validate(&self) -> Result<(), ValidationError> {
         validate_id(&self.capture_id, "evidence.captureId")?;
+        validate_sha256(&self.content_sha256, "evidence.contentSha256")?;
         self.region.validate()
     }
 }
@@ -707,6 +709,7 @@ pub struct ComparisonRecord {
     pub changed_pixels: u64,
     pub changed_fraction: f64,
     pub mean_absolute_difference: f64,
+    pub rms_difference: f64,
     pub perceptual_distance: Option<f64>,
 }
 
@@ -740,6 +743,13 @@ impl Validate for ComparisonRecord {
         if !(0.0..=1.0).contains(&self.mean_absolute_difference) {
             return Err(ValidationError::new(
                 "meanAbsoluteDifference",
+                "must be between 0.0 and 1.0",
+            ));
+        }
+        validate_finite(self.rms_difference, "rmsDifference")?;
+        if !(0.0..=1.0).contains(&self.rms_difference) {
+            return Err(ValidationError::new(
+                "rmsDifference",
                 "must be between 0.0 and 1.0",
             ));
         }
@@ -921,6 +931,12 @@ impl EvidenceManifest {
         let capture = self.capture(&evidence.capture_id).ok_or_else(|| {
             ValidationError::new("evidence.captureId", "references a missing capture")
         })?;
+        if capture.image.sha256 != evidence.content_sha256 {
+            return Err(ValidationError::new(
+                "evidence.contentSha256",
+                "must match the referenced capture checksum",
+            ));
+        }
         evidence
             .region
             .validate_against(&capture.dimensions, "evidence.region")

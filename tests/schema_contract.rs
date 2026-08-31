@@ -49,6 +49,8 @@ fn valid_capture(id: &str) -> CaptureRecord {
 fn valid_evidence(capture_id: &str) -> EvidenceRef {
     EvidenceRef {
         capture_id: capture_id.to_owned(),
+        content_sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            .to_owned(),
         region: EvidenceRegion {
             x: 10,
             y: 20,
@@ -268,6 +270,7 @@ fn comparison_and_before_after_references_are_checked() {
         changed_pixels: 10,
         changed_fraction: 10.0 / 480_000.0,
         mean_absolute_difference: 0.1,
+        rms_difference: 0.2,
         perceptual_distance: Some(0.2),
     });
     manifest.before_after = Some(BeforeAfter {
