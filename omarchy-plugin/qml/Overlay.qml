@@ -7,6 +7,7 @@ Item {
     visible: false
     anchors.fill: parent
     focus: true
+    property string capturePayload: "{}"
 
     function open(payloadJson) {
         visible = true
@@ -17,8 +18,25 @@ Item {
         visible = false
     }
 
-    Process { id: captureWindow; command: ["surfacecheck", "capture", "window", "--json"] }
-    Process { id: captureRegion; command: ["surfacecheck", "capture", "region", "--json"] }
+    function forwardCapture(rawText) {
+        capturePayload = String(rawText || "{}").slice(0, 65536)
+        summonPanel.running = true
+    }
+
+    Process {
+        id: captureWindow
+        command: ["surfacecheck", "capture", "window", "--json"]
+        stdout: StdioCollector { onStreamFinished: root.forwardCapture(this.text) }
+    }
+    Process {
+        id: captureRegion
+        command: ["surfacecheck", "capture", "region", "--json"]
+        stdout: StdioCollector { onStreamFinished: root.forwardCapture(this.text) }
+    }
+    Process {
+        id: summonPanel
+        command: ["omarchy-shell", "shell", "summon", "tcballard.surfacecheck", root.capturePayload]
+    }
 
     Rectangle {
         anchors.fill: parent
@@ -34,11 +52,11 @@ Item {
     }
 
     Keys.onReturnPressed: {
-        captureRegion.start()
+        captureRegion.running = true
         root.close()
     }
     Keys.onWPressed: {
-        captureWindow.start()
+        captureWindow.running = true
         root.close()
     }
     Keys.onEscapePressed: root.close()

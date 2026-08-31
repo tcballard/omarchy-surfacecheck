@@ -40,14 +40,14 @@ Item {
         MouseArea {
             anchors.fill: parent
             onClicked: {
-                summonPanel.start()
+                summonPanel.running = true
                 root.close()
             }
         }
     }
 
     Keys.onReturnPressed: {
-        summonPanel.start()
+        summonPanel.running = true
         root.close()
     }
     Keys.onEscapePressed: root.close()
