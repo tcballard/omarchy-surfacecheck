@@ -9,4 +9,3 @@ description = "Deterministic visual findings and before/after comparison"
 sha2.workspace = true
 surfacecheck-capture = { path = "../surfacecheck-capture" }
 surfacecheck-core = { path = "../surfacecheck-core" }
-
