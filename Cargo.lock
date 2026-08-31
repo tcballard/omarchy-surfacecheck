@@ -224,6 +224,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "surfacecheck-cli"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "surfacecheck-capture",
+ "surfacecheck-core",
+ "surfacecheck-service",
+]
+
+[[package]]
 name = "surfacecheck-core"
 version = "0.1.0"
 dependencies = [
@@ -237,6 +249,14 @@ version = "0.1.0"
 dependencies = [
  "sha2",
  "surfacecheck-capture",
+ "surfacecheck-core",
+]
+
+[[package]]
+name = "surfacecheck-service"
+version = "0.1.0"
+dependencies = [
+ "libc",
  "surfacecheck-core",
 ]
 

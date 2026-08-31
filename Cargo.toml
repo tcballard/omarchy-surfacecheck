@@ -4,6 +4,8 @@ members = [
     "crates/surfacecheck-capture",
     "crates/surfacecheck-store",
     "crates/surfacecheck-review",
+    "crates/surfacecheck-service",
+    "crates/surfacecheck-cli",
 ]
 resolver = "2"
 

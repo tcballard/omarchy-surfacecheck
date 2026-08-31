@@ -1,0 +1,10 @@
+[package]
+name = "surfacecheck-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Bounded authenticated runtime IPC and single-flight operation state"
+
+[dependencies]
+libc.workspace = true
+surfacecheck-core = { path = "../surfacecheck-core" }
