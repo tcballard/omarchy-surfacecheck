@@ -23,9 +23,14 @@ unknown enum values are rejected.
 An `EvidenceManifest` is a versioned session record containing bounded capture
 records, a local user note, deterministic findings, agent findings, an optional
 comparison, an optional before/after relationship, and explicit provenance.
-Capture records carry capture type, controlled timestamp, dimensions, fractional
-scale, checksummed relative image object, tool versions, and only an optional
-redacted application alias. Raw titles, URLs and paths are not represented.
+Capture records carry capture type, controlled timestamp, an explicit stale
+flag, dimensions, fractional scale, checksummed relative image object, tool
+versions, and only an optional redacted application alias. Raw titles, URLs and
+paths are not represented. Region requests may omit their region to invoke the
+interactive selector; a supplied region is validated before non-interactive
+capture. Explicit application requests accept only a bounded exact Hyprland
+address beginning with `0x`; aliases are optional, user-supplied and redacted
+before persistence.
 
 Finding arrays are deliberately different types. Deterministic findings contain
 a stable code and optional numeric measurement. Agent findings additionally

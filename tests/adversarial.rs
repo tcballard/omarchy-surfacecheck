@@ -1,6 +1,6 @@
 use surfacecheck_core::{
     from_json, to_canonical_json, Dimensions, EvidenceManifest, Scale, Validate,
-    MAX_JSON_FRAME_BYTES, SCHEMA_VERSION,
+    MAX_JSON_FRAME_BYTES, MAX_JSON_NESTING_DEPTH, SCHEMA_VERSION,
 };
 
 #[test]
@@ -34,4 +34,15 @@ fn canonical_contract_bytes_are_reproducible_for_controlled_inputs() {
     let encoded_b = to_canonical_json(&first).expect("canonical");
     assert_eq!(encoded_a, encoded_b);
     assert_eq!(SCHEMA_VERSION, 1);
+}
+
+#[test]
+fn deeply_nested_json_is_rejected_before_recursive_parsing() {
+    let nested = "[".repeat(MAX_JSON_NESTING_DEPTH + 1);
+    let closed = "]".repeat(MAX_JSON_NESTING_DEPTH + 1);
+    let input = format!("{nested}{closed}");
+    assert!(!surfacecheck_core::json_nesting_within_limit(
+        input.as_bytes()
+    ));
+    assert!(from_json::<EvidenceManifest>(input.as_bytes()).is_err());
 }

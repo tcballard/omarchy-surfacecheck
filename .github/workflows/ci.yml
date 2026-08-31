@@ -24,6 +24,8 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Build documentation
         run: cargo doc --workspace --no-deps --locked
+      - name: Check dependency policy
+        run: scripts/check_dependencies.sh
       - name: Validate plugin contract
         run: python3 scripts/validate_plugin.py omarchy-plugin
       - name: Scan source for accidental secrets

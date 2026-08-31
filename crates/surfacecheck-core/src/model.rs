@@ -7,6 +7,7 @@ use std::fmt;
 pub const SCHEMA_VERSION: u16 = 1;
 
 pub const MAX_JSON_FRAME_BYTES: usize = 1_048_576;
+pub const MAX_JSON_NESTING_DEPTH: usize = 32;
 pub const MAX_ID_BYTES: usize = 128;
 pub const MAX_TEXT_BYTES: usize = 16 * 1024;
 pub const MAX_TOOL_VERSION_BYTES: usize = 128;
@@ -91,9 +92,48 @@ where
             format!("JSON frame exceeds {MAX_JSON_FRAME_BYTES} bytes"),
         )));
     }
+    if !json_nesting_within_limit(input) {
+        return Err(ContractError::Validation(ValidationError::new(
+            "$",
+            format!("JSON nesting exceeds {MAX_JSON_NESTING_DEPTH} levels"),
+        )));
+    }
     let value: T = serde_json::from_slice(input)?;
     value.validate().map_err(ContractError::Validation)?;
     Ok(value)
+}
+
+/// Check nesting before handing hostile JSON to a recursive deserializer.
+/// Strings and escaped quotes are skipped, while structural matching is left
+/// to `serde_json` so malformed input still receives its normal parse error.
+pub fn json_nesting_within_limit(input: &[u8]) -> bool {
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for byte in input {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if *byte == b'\\' {
+                escaped = true;
+            } else if *byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match *byte {
+            b'"' => in_string = true,
+            b'{' | b'[' => {
+                depth = depth.saturating_add(1);
+                if depth > MAX_JSON_NESTING_DEPTH {
+                    return false;
+                }
+            }
+            b'}' | b']' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    true
 }
 
 /// Validate and serialize using the declaration order of each record.
@@ -106,7 +146,14 @@ where
     T: Serialize + Validate,
 {
     value.validate().map_err(ContractError::Validation)?;
-    Ok(serde_json::to_vec(value)?)
+    let encoded = serde_json::to_vec(value)?;
+    if encoded.len() > MAX_JSON_FRAME_BYTES {
+        return Err(ContractError::Validation(ValidationError::new(
+            "$",
+            format!("canonical JSON exceeds {MAX_JSON_FRAME_BYTES} bytes"),
+        )));
+    }
+    Ok(encoded)
 }
 
 fn validate_schema_version(version: u16) -> Result<(), ValidationError> {
@@ -322,9 +369,12 @@ pub enum CliCommand {
     CaptureApplication,
     Review,
     Compare,
+    Annotate,
+    SelectBeforeAfter,
     Export,
     HandoffPremonition,
     Cancel,
+    Service,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -473,7 +523,7 @@ pub struct ToolVersion {
 
 impl Validate for ToolVersion {
     fn validate(&self) -> Result<(), ValidationError> {
-        validate_text(
+        validate_safe_metadata_text(
             &self.version,
             "toolVersion.version",
             MAX_TOOL_VERSION_BYTES,
@@ -491,7 +541,7 @@ pub struct ApplicationIdentity {
 
 impl Validate for ApplicationIdentity {
     fn validate(&self) -> Result<(), ValidationError> {
-        validate_text(
+        validate_safe_metadata_text(
             &self.redacted_alias,
             "application.redactedAlias",
             MAX_PROVENANCE_TEXT_BYTES,
@@ -512,19 +562,19 @@ pub struct Provenance {
 
 impl Validate for Provenance {
     fn validate(&self) -> Result<(), ValidationError> {
-        validate_text(
+        validate_safe_metadata_text(
             &self.producer,
             "provenance.producer",
             MAX_PROVENANCE_TEXT_BYTES,
             false,
         )?;
-        validate_text(
+        validate_safe_metadata_text(
             &self.producer_version,
             "provenance.producerVersion",
             MAX_PROVENANCE_TEXT_BYTES,
             false,
         )?;
-        validate_text(
+        validate_safe_metadata_text(
             &self.producer_commit,
             "provenance.producerCommit",
             MAX_PROVENANCE_TEXT_BYTES,
@@ -536,6 +586,22 @@ impl Validate for Provenance {
         }
         Ok(())
     }
+}
+
+fn validate_safe_metadata_text(
+    value: &str,
+    field: &str,
+    max_bytes: usize,
+    allow_empty: bool,
+) -> Result<(), ValidationError> {
+    validate_text(value, field, max_bytes, allow_empty)?;
+    if value.contains('/') || value.contains('\\') || value.contains("://") {
+        return Err(ValidationError::new(
+            field,
+            "must not contain a path or URL",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -598,6 +664,13 @@ pub struct CaptureRecord {
     pub capture_id: String,
     pub capture_type: CaptureType,
     pub captured_at: u64,
+    /// Whether the compositor identity or geometry changed during capture.
+    ///
+    /// This is a measured capture fact.  It is intentionally separate from
+    /// review severity so a stale image can never be mistaken for a clean
+    /// image merely because the reviewer did not run yet.
+    #[serde(default)]
+    pub stale: bool,
     pub image: ImageEvidence,
     pub dimensions: Dimensions,
     pub scale: Scale,
@@ -757,10 +830,10 @@ impl Validate for ComparisonRecord {
         }
         if let Some(distance) = self.perceptual_distance {
             validate_finite(distance, "perceptualDistance")?;
-            if distance < 0.0 {
+            if !(0.0..=1.0).contains(&distance) {
                 return Err(ValidationError::new(
                     "perceptualDistance",
-                    "must not be negative",
+                    "must be between 0.0 and 1.0",
                 ));
             }
         }
@@ -958,11 +1031,17 @@ impl Validate for EmptyRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CaptureWindowRequest {
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
     pub user_note: Option<String>,
 }
 
 impl Validate for CaptureWindowRequest {
     fn validate(&self) -> Result<(), ValidationError> {
+        if let Some(session_id) = &self.session_id {
+            validate_id(session_id, "sessionId")?;
+        }
         if let Some(note) = &self.user_note {
             validate_text(note, "userNote", MAX_TEXT_BYTES, true)?;
         }
@@ -973,13 +1052,24 @@ impl Validate for CaptureWindowRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CaptureRegionRequest {
-    pub region: Region,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// `None` asks the compositor selection overlay to choose the region.
+    /// Supplying a region is reserved for a future non-interactive harness.
+    #[serde(default)]
+    pub region: Option<Region>,
+    #[serde(default)]
     pub user_note: Option<String>,
 }
 
 impl Validate for CaptureRegionRequest {
     fn validate(&self) -> Result<(), ValidationError> {
-        self.region.validate()?;
+        if let Some(session_id) = &self.session_id {
+            validate_id(session_id, "sessionId")?;
+        }
+        if let Some(region) = &self.region {
+            region.validate()?;
+        }
         if let Some(note) = &self.user_note {
             validate_text(note, "userNote", MAX_TEXT_BYTES, true)?;
         }
@@ -990,18 +1080,44 @@ impl Validate for CaptureRegionRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CaptureApplicationRequest {
-    pub application_alias: String,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    pub application_address: String,
+    #[serde(default)]
+    pub application_alias: Option<String>,
+    #[serde(default)]
     pub user_note: Option<String>,
 }
 
 impl Validate for CaptureApplicationRequest {
     fn validate(&self) -> Result<(), ValidationError> {
+        if let Some(session_id) = &self.session_id {
+            validate_id(session_id, "sessionId")?;
+        }
         validate_text(
-            &self.application_alias,
-            "applicationAlias",
-            MAX_PROVENANCE_TEXT_BYTES,
+            &self.application_address,
+            "applicationAddress",
+            MAX_ID_BYTES,
             false,
         )?;
+        let address = self.application_address.strip_prefix("0x").ok_or_else(|| {
+            ValidationError::new(
+                "applicationAddress",
+                "must be an exact Hyprland hexadecimal address beginning with 0x",
+            )
+        })?;
+        if self.application_address.len() > 64
+            || address.is_empty()
+            || !address.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(ValidationError::new(
+                "applicationAddress",
+                "must be an exact Hyprland hexadecimal address",
+            ));
+        }
+        if let Some(alias) = &self.application_alias {
+            validate_text(alias, "applicationAlias", MAX_PROVENANCE_TEXT_BYTES, false)?;
+        }
         if let Some(note) = &self.user_note {
             validate_text(note, "userNote", MAX_TEXT_BYTES, true)?;
         }
@@ -1012,12 +1128,18 @@ impl Validate for CaptureApplicationRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewRequest {
+    #[serde(default)]
+    pub session_id: Option<String>,
     pub capture_id: String,
+    #[serde(default)]
     pub disclose_agent: bool,
 }
 
 impl Validate for ReviewRequest {
     fn validate(&self) -> Result<(), ValidationError> {
+        if let Some(session_id) = &self.session_id {
+            validate_id(session_id, "sessionId")?;
+        }
         validate_id(&self.capture_id, "captureId")
     }
 }
@@ -1050,17 +1172,59 @@ impl Validate for ConsentRecord {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompareRequest {
+    #[serde(default)]
+    pub session_id: Option<String>,
     pub before_capture_id: String,
     pub after_capture_id: String,
 }
 
 impl Validate for CompareRequest {
     fn validate(&self) -> Result<(), ValidationError> {
+        if let Some(session_id) = &self.session_id {
+            validate_id(session_id, "sessionId")?;
+        }
         validate_id(&self.before_capture_id, "beforeCaptureId")?;
         validate_id(&self.after_capture_id, "afterCaptureId")?;
         if self.before_capture_id == self.after_capture_id {
             return Err(ValidationError::new(
                 "compare",
+                "before and after captures must differ",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnnotateRequest {
+    pub session_id: String,
+    pub note: String,
+}
+
+impl Validate for AnnotateRequest {
+    fn validate(&self) -> Result<(), ValidationError> {
+        validate_id(&self.session_id, "sessionId")?;
+        validate_text(&self.note, "note", MAX_TEXT_BYTES, true)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SelectBeforeAfterRequest {
+    pub session_id: String,
+    pub before_capture_id: String,
+    pub after_capture_id: String,
+}
+
+impl Validate for SelectBeforeAfterRequest {
+    fn validate(&self) -> Result<(), ValidationError> {
+        validate_id(&self.session_id, "sessionId")?;
+        validate_id(&self.before_capture_id, "beforeCaptureId")?;
+        validate_id(&self.after_capture_id, "afterCaptureId")?;
+        if self.before_capture_id == self.after_capture_id {
+            return Err(ValidationError::new(
+                "beforeAfter",
                 "before and after captures must differ",
             ));
         }
@@ -1090,6 +1254,25 @@ pub struct CancelRequest {
 impl Validate for CancelRequest {
     fn validate(&self) -> Result<(), ValidationError> {
         validate_id(&self.operation_id, "operationId")
+    }
+}
+
+/// A small, local selector used by the CLI handoff command.  The service
+/// resolves the finding against its authoritative manifest and constructs the
+/// full Premonition defect envelope only after explicit external consent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HandoffFindingRequest {
+    pub session_id: String,
+    pub finding_id: String,
+    pub consent: ConsentRecord,
+}
+
+impl Validate for HandoffFindingRequest {
+    fn validate(&self) -> Result<(), ValidationError> {
+        validate_id(&self.session_id, "sessionId")?;
+        validate_id(&self.finding_id, "findingId")?;
+        self.consent.validate()
     }
 }
 
@@ -1186,6 +1369,12 @@ impl Validate for AgentReviewRequest {
             evidence.validate()?;
         }
         self.consent.validate()?;
+        if self.provenance.kind != ProvenanceKind::AgentReview {
+            return Err(ValidationError::new(
+                "provenance.kind",
+                "agent review requests require agent_review provenance",
+            ));
+        }
         self.provenance.validate()
     }
 }
@@ -1208,6 +1397,12 @@ impl Validate for AgentReviewResponse {
         validate_bounded(&self.findings, "findings", MAX_AGENT_FINDINGS)?;
         for finding in &self.findings {
             finding.validate()?;
+        }
+        if self.provenance.kind != ProvenanceKind::AgentReview {
+            return Err(ValidationError::new(
+                "provenance.kind",
+                "agent review responses require agent_review provenance",
+            ));
         }
         self.provenance.validate()?;
         match (&self.status, &self.error) {
@@ -1253,6 +1448,12 @@ impl Validate for DefectEnvelope {
         validate_nonempty_bounded(&self.evidence, "evidence", MAX_EVIDENCE_REFS)?;
         for evidence in &self.evidence {
             evidence.validate()?;
+        }
+        if self.provenance.kind != ProvenanceKind::Handoff {
+            return Err(ValidationError::new(
+                "provenance.kind",
+                "defect envelopes require handoff provenance",
+            ));
         }
         validate_text(
             &self.suggested_next_action,

@@ -1,6 +1,7 @@
 use crate::{
     decode_png, CommandRunner, CommandSpec, DecodedPng, PngLimits, RunnerError, ToolOutput,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
 use std::sync::{atomic::AtomicBool, Arc};
@@ -20,13 +21,22 @@ pub struct WindowSnapshot {
 pub enum CaptureMode {
     ActiveWindow,
     Region,
-    Application { address: String },
+    /// Capture a caller-validated region without invoking the interactive
+    /// selector. This is used by deterministic harnesses and future IPC
+    /// clients; interactive UI should continue to use `Region`.
+    ExplicitRegion {
+        region: Region,
+    },
+    Application {
+        address: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CaptureOutcome {
     pub capture_type: CaptureType,
     pub image: DecodedPng,
+    pub png_bytes: Vec<u8>,
     pub region: Region,
     pub stale: bool,
 }
@@ -56,7 +66,8 @@ impl fmt::Display for CaptureFailure {
 
 impl std::error::Error for CaptureFailure {}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ToolAvailability {
     pub tool: ToolName,
     pub status: OperationStatus,
@@ -104,11 +115,19 @@ impl<R: CommandRunner> CaptureEngine<R> {
                 cancellation: self.cancellation.clone(),
             }) {
                 Ok(output) if output.exit_code == Some(0) && !output.output_limited => {
-                    ToolAvailability {
-                        tool,
-                        status: OperationStatus::Success,
-                        version: bounded_version(&output.stdout),
-                        error: None,
+                    match bounded_version(&output.stdout) {
+                        Some(version) => ToolAvailability {
+                            tool,
+                            status: OperationStatus::Success,
+                            version: Some(version),
+                            error: None,
+                        },
+                        None => ToolAvailability {
+                            tool,
+                            status: OperationStatus::Error,
+                            version: None,
+                            error: Some(ErrorCode::ToolFailed),
+                        },
                     }
                 }
                 Err(CaptureFailure { status, code }) => ToolAvailability {
@@ -138,17 +157,32 @@ impl<R: CommandRunner> CaptureEngine<R> {
         match mode {
             CaptureMode::ActiveWindow => self.capture_window(),
             CaptureMode::Region => self.capture_region(),
+            CaptureMode::ExplicitRegion { region } => {
+                region.validate().map_err(|_| CaptureFailure {
+                    status: OperationStatus::Invalid,
+                    code: ErrorCode::InvalidRequest,
+                })?;
+                let (image, png_bytes) = self.capture_region_with_grim(&region)?;
+                Ok(CaptureOutcome {
+                    capture_type: CaptureType::Region,
+                    image,
+                    png_bytes,
+                    region,
+                    stale: false,
+                })
+            }
             CaptureMode::Application { address } => self.capture_application(&address),
         }
     }
 
     fn capture_window(&self) -> Result<CaptureOutcome, CaptureFailure> {
         let before = self.active_window()?;
-        let image = self.capture_region_with_grim(&before.region)?;
+        let (image, png_bytes) = self.capture_region_with_grim(&before.region)?;
         let after = self.active_window()?;
         Ok(CaptureOutcome {
             capture_type: CaptureType::Window,
             image,
+            png_bytes,
             region: before.region.clone(),
             stale: before != after,
         })
@@ -182,14 +216,21 @@ impl<R: CommandRunner> CaptureEngine<R> {
                 code: ErrorCode::InvalidRequest,
             });
         }
+        if selection.exit_code != Some(0) {
+            return Err(CaptureFailure {
+                status: OperationStatus::Error,
+                code: ErrorCode::ToolFailed,
+            });
+        }
         let region = parse_selection(&selection.stdout).map_err(|_| CaptureFailure {
             status: OperationStatus::Invalid,
             code: ErrorCode::InvalidRequest,
         })?;
-        let image = self.capture_region_with_grim(&region)?;
+        let (image, png_bytes) = self.capture_region_with_grim(&region)?;
         Ok(CaptureOutcome {
             capture_type: CaptureType::Region,
             image,
+            png_bytes,
             region,
             stale: false,
         })
@@ -208,7 +249,7 @@ impl<R: CommandRunner> CaptureEngine<R> {
                 status: OperationStatus::Invalid,
                 code: ErrorCode::NotFound,
             })?;
-        let image = self.capture_region_with_grim(&before.region)?;
+        let (image, png_bytes) = self.capture_region_with_grim(&before.region)?;
         let after = self
             .clients()?
             .into_iter()
@@ -216,6 +257,7 @@ impl<R: CommandRunner> CaptureEngine<R> {
         Ok(CaptureOutcome {
             capture_type: CaptureType::Application,
             image,
+            png_bytes,
             region: before.region.clone(),
             stale: after.as_ref() != Some(&before),
         })
@@ -274,7 +316,10 @@ impl<R: CommandRunner> CaptureEngine<R> {
         Ok(output)
     }
 
-    fn capture_region_with_grim(&self, region: &Region) -> Result<DecodedPng, CaptureFailure> {
+    fn capture_region_with_grim(
+        &self,
+        region: &Region,
+    ) -> Result<(DecodedPng, Vec<u8>), CaptureFailure> {
         let output = self.run(CommandSpec {
             program: "grim".into(),
             args: vec!["-g".into(), format_region(region)],
@@ -308,10 +353,11 @@ impl<R: CommandRunner> CaptureEngine<R> {
                 code: ErrorCode::ToolFailed,
             });
         }
-        decode_png(&output.stdout, self.png_limits).map_err(|_| CaptureFailure {
+        let image = decode_png(&output.stdout, self.png_limits).map_err(|_| CaptureFailure {
             status: OperationStatus::Invalid,
             code: ErrorCode::InvalidEvidence,
-        })
+        })?;
+        Ok((image, output.stdout))
     }
 
     fn run(&self, spec: CommandSpec) -> Result<ToolOutput, CaptureFailure> {
@@ -333,7 +379,13 @@ fn bounded_version(output: &[u8]) -> Option<String> {
         .split(|byte| *byte == b'\n' || *byte == b'\r')
         .next()?;
     let value = std::str::from_utf8(line).ok()?.trim();
-    if value.is_empty() || value.len() > 128 || value.chars().any(char::is_control) {
+    if value.is_empty()
+        || value.len() > 128
+        || value.chars().any(char::is_control)
+        || value.contains('/')
+        || value.contains('\\')
+        || value.contains("://")
+    {
         None
     } else {
         Some(value.to_owned())
@@ -450,13 +502,10 @@ fn parse_pair_u32(value: Option<&Value>) -> Result<[u32; 2], ()> {
 }
 
 fn validate_address(address: &str) -> Result<(), ()> {
-    if address.is_empty()
-        || address.len() > 64
-        || !address
-            .strip_prefix("0x")
-            .unwrap_or(address)
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
+    let digits = address.strip_prefix("0x").ok_or(())?;
+    if address.len() > 64
+        || digits.is_empty()
+        || !digits.bytes().all(|byte| byte.is_ascii_hexdigit())
     {
         return Err(());
     }
@@ -538,6 +587,22 @@ mod tests {
     }
 
     #[test]
+    fn region_tool_failure_with_output_is_not_misreported_as_cancellation() {
+        let runner = FakeRunner::new(vec![output(b"not-a-selection".to_vec()).map(
+            |mut value| {
+                value.exit_code = Some(1);
+                value
+            },
+        )]);
+        let engine = CaptureEngine::new(runner);
+        let error = engine
+            .capture(CaptureMode::Region)
+            .expect_err("tool failure");
+        assert_eq!(error.status, OperationStatus::Error);
+        assert_eq!(error.code, ErrorCode::ToolFailed);
+    }
+
+    #[test]
     fn active_window_focus_change_marks_capture_stale() {
         let first = br#"{"address":"0xabc","at":[0,0],"size":[1,1],"title":"first"}"#.to_vec();
         let second = br#"{"address":"0xdef","at":[0,0],"size":[1,1],"title":"second"}"#.to_vec();
@@ -573,6 +638,28 @@ mod tests {
             .capture(CaptureMode::Region)
             .expect_err("missing slurp");
         assert_eq!(error.status, OperationStatus::MissingTool);
+    }
+
+    #[test]
+    fn successful_probe_without_a_bounded_version_is_not_claimed_ready() {
+        let runner = FakeRunner::new(vec![
+            output(Vec::new()),
+            output(b"slurp 1.0".to_vec()),
+            output(b"hyprctl 1.0".to_vec()),
+        ]);
+        let engine = CaptureEngine::new(runner);
+        let tools = engine.probe_tools();
+        assert_eq!(tools[0].status, OperationStatus::Error);
+        assert_eq!(tools[0].error, Some(ErrorCode::ToolFailed));
+    }
+
+    #[test]
+    fn hostile_probe_version_is_not_persisted() {
+        assert!(bounded_version(b"/home/user/secret\n").is_none());
+        assert_eq!(
+            bounded_version(b"grim 1.5.0\n").as_deref(),
+            Some("grim 1.5.0")
+        );
     }
 
     #[test]

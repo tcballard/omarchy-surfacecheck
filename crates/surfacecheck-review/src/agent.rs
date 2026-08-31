@@ -27,6 +27,14 @@ impl CancellationToken {
         Self::default()
     }
 
+    /// Attach a review operation to the service-owned cancellation flag.
+    /// Keeping the flag behind the small token type prevents adapters from
+    /// mutating service state while still allowing cancellation to interrupt
+    /// an in-flight review.
+    pub fn from_flag(flag: Arc<AtomicBool>) -> Self {
+        Self(flag)
+    }
+
     pub fn cancel(&self) {
         self.0.store(true, Ordering::Release);
     }

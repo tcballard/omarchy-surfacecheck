@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 description = "Strict schemaVersion 1 JSON command surface for SurfaceCheck"
 
+[[bin]]
+name = "surfacecheck"
+path = "src/main.rs"
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true

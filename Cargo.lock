@@ -257,7 +257,12 @@ name = "surfacecheck-service"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "serde",
+ "serde_json",
+ "surfacecheck-capture",
  "surfacecheck-core",
+ "surfacecheck-review",
+ "surfacecheck-store",
 ]
 
 [[package]]

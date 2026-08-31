@@ -140,6 +140,33 @@ pub fn deterministic_findings(
             &evidence,
         ));
     }
+
+    // Luminance range is a reproducible measurement that is useful when a
+    // reviewer is checking contrast. It is deliberately informational: a
+    // color-space-independent ratio or accessibility judgement would require
+    // additional rendering context that is not present in a capture bundle.
+    let mut minimum_luminance = u8::MAX;
+    let mut maximum_luminance = 0u8;
+    for pixel in input.image.pixels.as_chunks::<4>().0 {
+        let luminance = (0.2126 * f64::from(pixel[0])
+            + 0.7152 * f64::from(pixel[1])
+            + 0.0722 * f64::from(pixel[2]))
+        .round()
+        .clamp(0.0, 255.0) as u8;
+        minimum_luminance = minimum_luminance.min(luminance);
+        maximum_luminance = maximum_luminance.max(luminance);
+    }
+    let luminance_range = f64::from(maximum_luminance.saturating_sub(minimum_luminance)) / 255.0;
+    findings.push(finding(
+        input,
+        DeterministicCategory::ContrastMeasurement,
+        Severity::Info,
+        "contrast_measurement",
+        "Measured sRGB luminance range; this is an informational fact, not an accessibility judgement.",
+        Some(luminance_range),
+        &evidence,
+    ));
+
     let width =
         usize::try_from(input.image.dimensions.width).map_err(|_| ReviewError::InvalidInput)?;
     let height =

@@ -1,0 +1,35 @@
+[Unit]
+Description=SurfaceCheck local visual-inspection service
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/surfacecheckd
+Restart=on-failure
+RestartSec=1s
+UMask=0077
+RuntimeDirectory=surfacecheck
+RuntimeDirectoryMode=0700
+StateDirectory=surfacecheck
+StateDirectoryMode=0700
+Environment=SURFACECHECK_RUNTIME_DIR=%t
+Environment=SURFACECHECK_STATE_DIR=%S/surfacecheck
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+MemoryMax=768M
+TasksMax=64
+ReadWritePaths=%t/surfacecheck %S/surfacecheck
+
+[Install]
+WantedBy=graphical-session.target

@@ -88,11 +88,26 @@ impl CommandRunner for DirectCommandRunner {
             }
         })?;
         if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(&spec.stdin).map_err(|_| RunnerError::Io)?;
+            if stdin.write_all(&spec.stdin).is_err() {
+                terminate_group(&mut child);
+                return Err(RunnerError::Io);
+            }
             drop(stdin);
         }
-        let stdout = child.stdout.take().ok_or(RunnerError::Io)?;
-        let stderr = child.stderr.take().ok_or(RunnerError::Io)?;
+        let stdout = match child.stdout.take() {
+            Some(stdout) => stdout,
+            None => {
+                terminate_group(&mut child);
+                return Err(RunnerError::Io);
+            }
+        };
+        let stderr = match child.stderr.take() {
+            Some(stderr) => stderr,
+            None => {
+                terminate_group(&mut child);
+                return Err(RunnerError::Io);
+            }
+        };
         let stdout_limit = spec.max_stdout_bytes;
         let stderr_limit = spec.max_stderr_bytes;
         let stdout_reader = thread::spawn(move || read_bounded(stdout, stdout_limit));
@@ -110,8 +125,13 @@ impl CommandRunner for DirectCommandRunner {
                 terminate_group(&mut child);
                 break;
             }
-            if child.try_wait().map_err(|_| RunnerError::Io)?.is_some() {
-                break;
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) => {}
+                Err(_) => {
+                    terminate_group(&mut child);
+                    return Err(RunnerError::Io);
+                }
             }
             if Instant::now() >= deadline {
                 timed_out = true;

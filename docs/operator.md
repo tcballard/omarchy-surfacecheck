@@ -7,6 +7,16 @@ directory is configured and the bounded versions/status of `grim`, `slurp` and
 `hyprctl`. It never includes a window title, path or raw stderr. On a machine
 without Wayland tools, use the response as an honest missing-tool report.
 
+Start `surfacecheckd` as the optional user service before mutating evidence:
+
+```sh
+systemctl --user enable --now surfacecheckd.service
+```
+
+The client uses one authenticated, length-framed AF_UNIX request per command.
+The daemon owns the current operation and accepts cancellation from a separate
+client, so an Esc/cancel action is not blocked behind a capture subprocess.
+
 ## Capture
 
 `surfacecheck capture window --json` snapshots the active Hyprland window,

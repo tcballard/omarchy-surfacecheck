@@ -27,6 +27,26 @@ successful empty capture. `surfacecheckd` uses a private Unix socket when a
 runtime is installed, while the CLI remains useful for capability probing and
 strict argument validation without a compositor.
 
+The complete v1 command surface is:
+
+```text
+surfacecheck status --json
+surfacecheck service --json
+surfacecheck capture window|region --json [--session ID] [--note NOTE]
+surfacecheck capture application ADDRESS --json [--session ID] [--alias ALIAS]
+surfacecheck review CAPTURE_ID --json [--session ID] [--agent --consent-local]
+surfacecheck compare BEFORE_ID AFTER_ID --json [--session ID]
+surfacecheck annotate SESSION --note NOTE --json
+surfacecheck select-before-after SESSION BEFORE_ID AFTER_ID --json
+surfacecheck export SESSION --json
+surfacecheck handoff premonition FINDING_ID --consent-external --json
+surfacecheck cancel OPERATION_ID GENERATION --json
+```
+
+Only the daemon mutates evidence. The direct capture fallback is deliberately
+marked `stored: false` and exists for honest capability diagnostics when no
+user service is running.
+
 The source-only plugin can be checked with:
 
 ```sh
@@ -88,3 +108,7 @@ It runs formatting, locked tests, warnings-denied Clippy, rustdoc, plugin
 checks, exact-object packaging, archive extraction and revalidation. The live
 matrix in [`docs/live-acceptance.md`](docs/live-acceptance.md) remains a gate
 until it is run on current Omarchy Quattro hardware.
+
+The dependency and exact-object rules are recorded in
+[`docs/supply-chain.md`](docs/supply-chain.md); no package or evidence is
+uploaded by the repository tooling.

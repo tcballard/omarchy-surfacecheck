@@ -7,4 +7,9 @@ description = "Bounded authenticated runtime IPC and single-flight operation sta
 
 [dependencies]
 libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+surfacecheck-capture = { path = "../surfacecheck-capture" }
 surfacecheck-core = { path = "../surfacecheck-core" }
+surfacecheck-review = { path = "../surfacecheck-review" }
+surfacecheck-store = { path = "../surfacecheck-store" }
