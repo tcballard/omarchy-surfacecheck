@@ -230,6 +230,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "surfacecheck-store"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "surfacecheck-core",
+]
+
+[[package]]
 name = "syn"
 version = "3.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
