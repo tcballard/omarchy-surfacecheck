@@ -7,7 +7,8 @@ description = "Bounded PNG and compositor geometry handling for SurfaceCheck"
 
 [dependencies]
 flate2.workspace = true
+libc.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 surfacecheck-core = { path = "../surfacecheck-core" }
-

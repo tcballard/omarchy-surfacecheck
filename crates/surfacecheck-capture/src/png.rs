@@ -8,6 +8,9 @@ use surfacecheck_core::{
 
 const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
 
+#[cfg(test)]
+pub(crate) use tests::test_png;
+
 #[derive(Debug, Clone, Copy)]
 pub struct PngLimits {
     pub max_file_bytes: usize,
@@ -447,6 +450,14 @@ mod tests {
         output.extend_from_slice(&chunk(b"IDAT", &compressed));
         output.extend_from_slice(&chunk(b"IEND", &[]));
         output
+    }
+
+    pub(crate) fn test_png(width: u32, height: u32) -> Vec<u8> {
+        let mut scanlines = Vec::new();
+        for _ in 0..height {
+            scanlines.extend_from_slice(&[0, 255, 0, 0, 255]);
+        }
+        png(width, height, 6, &scanlines)
     }
 
     #[test]
