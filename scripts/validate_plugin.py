@@ -69,7 +69,7 @@ def main() -> int:
                 fail(f"symlink found at {pathlib.Path(current, name)}")
     for qml in root.rglob("*.qml"):
         source = qml.read_text(encoding="utf-8")
-        forbidden = ("textFormat", "Qt.include", "eval(", "new Function", "file://", "loadFromModule")
+        forbidden = ("textFormat", "Qt.include", "eval(", "new Function", "file://", "loadFromModule", ".start(")
         if any(token in source for token in forbidden):
             fail(f"unsafe dynamic or rich-text construct in {qml}")
         if "function open(" not in source or "function close(" not in source:
