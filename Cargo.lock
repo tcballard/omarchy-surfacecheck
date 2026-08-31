@@ -216,7 +216,9 @@ name = "surfacecheck-capture"
 version = "0.1.0"
 dependencies = [
  "flate2",
+ "libc",
  "serde",
+ "serde_json",
  "sha2",
  "surfacecheck-core",
 ]
