@@ -8,4 +8,3 @@ description = "Versioned, bounded evidence contracts for Omarchy SurfaceCheck"
 [dependencies]
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.143", features = ["preserve_order"] }
-
