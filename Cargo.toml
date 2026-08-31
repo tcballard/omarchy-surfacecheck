@@ -3,6 +3,7 @@ members = [
     "crates/surfacecheck-core",
     "crates/surfacecheck-capture",
     "crates/surfacecheck-store",
+    "crates/surfacecheck-review",
 ]
 resolver = "2"
 

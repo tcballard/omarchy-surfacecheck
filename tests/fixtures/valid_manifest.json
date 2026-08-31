@@ -39,6 +39,7 @@
       "evidence": [
         {
           "captureId": "capture-1",
+          "contentSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
           "region": {
             "x": 10,
             "y": 20,
@@ -60,6 +61,7 @@
       "evidence": [
         {
           "captureId": "capture-1",
+          "contentSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
           "region": {
             "x": 10,
             "y": 20,

@@ -30,8 +30,9 @@ redacted application alias. Raw titles, URLs and paths are not represented.
 Finding arrays are deliberately different types. Deterministic findings contain
 a stable code and optional numeric measurement. Agent findings additionally
 contain a confidence and suggested next action. Both must cite at least one
-capture-local evidence rectangle. Manifest validation resolves every cited
-capture and rejects rectangles outside its dimensions.
+capture-local evidence rectangle and repeat the referenced image checksum.
+Manifest validation resolves every cited capture, checks that checksum, and
+rejects rectangles outside its dimensions.
 
 ## Agent and handoff contracts
 
