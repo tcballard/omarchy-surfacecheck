@@ -17,6 +17,7 @@ Item {
         visible = false
     }
 
+    Process { id: captureWindow; command: ["surfacecheck", "capture", "window", "--json"] }
     Process { id: captureRegion; command: ["surfacecheck", "capture", "region", "--json"] }
 
     Rectangle {
@@ -24,16 +25,20 @@ Item {
         color: "#66101820"
         border.width: 2
         border.color: "#86b8ff"
-        Text {
+        Column {
             anchors.centerIn: parent
-            text: "Select a region with the pointer, or press Enter. Esc cancels."
-            color: "white"
-            font.pixelSize: 20
+            spacing: 12
+            Text { text: "Check this surface"; color: "white"; font.pixelSize: 22 }
+            Text { text: "Enter: region  •  W: active window  •  Esc: cancel"; color: "#d8e5f2" }
         }
     }
 
     Keys.onReturnPressed: {
         captureRegion.start()
+        root.close()
+    }
+    Keys.onWPressed: {
+        captureWindow.start()
         root.close()
     }
     Keys.onEscapePressed: root.close()

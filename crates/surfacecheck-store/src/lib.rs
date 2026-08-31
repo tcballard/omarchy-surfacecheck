@@ -22,6 +22,12 @@ const MANIFEST_FILE: &str = "manifest.json";
 const JOURNAL_FILE: &str = "journal.jsonl";
 const CAPTURE_DIR: &str = "captures";
 const TAR_BLOCK: usize = 512;
+// A manifest can be close to the 1 MiB JSON bound and a session has bounded
+// captures, so this leaves room for journal history without permitting an
+// unbounded read during crash recovery.
+const MAX_JOURNAL_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_ARCHIVE_BYTES: u64 = MAX_EVIDENCE_BUNDLE_BYTES;
+const MAX_ARCHIVE_ENTRIES: usize = MAX_CAPTURE_COUNT + 2; // manifest, captures, checksums
 
 #[derive(Debug, Clone)]
 pub struct StoreConfig {
@@ -117,6 +123,14 @@ pub struct JournalEntry {
     pub entry_sha256: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportArtifact {
+    /// A path relative to the private SurfaceCheck state root.
+    pub relative_path: String,
+    pub bytes: u64,
+    pub sha256: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct EvidenceStore {
     config: StoreConfig,
@@ -138,6 +152,11 @@ impl EvidenceStore {
         validate_component(session_id, "session_id")?;
         let sessions = self.config.root.join(SESSION_DIR);
         reject_symlink(&sessions)?;
+        let session = sessions.join(session_id);
+        ensure_no_symlink_path(&sessions, &session)?;
+        if session.exists() {
+            return Err(StoreError::Exists(session_id.to_owned()));
+        }
         let count = fs::read_dir(&sessions)?.try_fold(0usize, |count, entry| {
             let entry = entry?;
             let metadata = fs::symlink_metadata(entry.path())?;
@@ -147,10 +166,6 @@ impl EvidenceStore {
         })?;
         if count >= self.config.max_sessions {
             return Err(StoreError::Quota("stored session limit reached".into()));
-        }
-        let session = sessions.join(session_id);
-        if session.exists() {
-            return Err(StoreError::Exists(session_id.to_owned()));
         }
         fs::create_dir(&session)?;
         set_private_mode(&session, true)?;
@@ -192,6 +207,33 @@ impl EvidenceStore {
         }
         validate_manifest(manifest)?;
         let current = session_size(&session)?;
+        let recovery = recover_journal(&session)?;
+        let (capture_journal, capture_entry_sha256) = journal_line(
+            &recovery,
+            JournalOperation::CapturePublished,
+            &format!("{CAPTURE_DIR}/{capture_id}.png"),
+            image,
+        )?;
+        let mut after_capture = recovery.clone();
+        let capture_sequence = recovery.entries.last().map_or(Ok(1), |entry| {
+            entry
+                .sequence
+                .checked_add(1)
+                .ok_or_else(|| StoreError::Journal("journal sequence overflow".into()))
+        })?;
+        after_capture.entries.push(JournalEntry {
+            sequence: capture_sequence,
+            operation: JournalOperation::CapturePublished,
+            relative_path: format!("{CAPTURE_DIR}/{capture_id}.png"),
+            content_sha256: sha256_hex(image),
+            entry_sha256: capture_entry_sha256,
+        });
+        let (manifest_journal, _) = journal_line(
+            &after_capture,
+            JournalOperation::ManifestPublished,
+            MANIFEST_FILE,
+            manifest,
+        )?;
         let projected = current
             .checked_add(
                 u64::try_from(image.len())
@@ -204,6 +246,8 @@ impl EvidenceStore {
                         .ok()?,
                 )
             })
+            .and_then(|value| value.checked_add(u64::try_from(capture_journal.len()).ok()?))
+            .and_then(|value| value.checked_add(u64::try_from(manifest_journal.len()).ok()?))
             .ok_or_else(|| StoreError::Quota("bundle size overflows".into()))?;
         if projected > self.config.max_bundle_bytes {
             return Err(StoreError::Quota(
@@ -218,6 +262,7 @@ impl EvidenceStore {
             image,
         )?;
         let manifest_path = session.join(MANIFEST_FILE);
+        ensure_no_symlink_path(&session, &manifest_path)?;
         atomic_replace(&manifest_path, manifest)?;
         append_journal(
             &session,
@@ -233,6 +278,64 @@ impl EvidenceStore {
         let path = session.join(MANIFEST_FILE);
         ensure_no_symlink_path(&session, &path)?;
         Ok(fs::read(path)?)
+    }
+
+    pub fn read_capture(&self, session_id: &str, capture_id: &str) -> Result<Vec<u8>, StoreError> {
+        validate_component(capture_id, "capture_id")?;
+        let session = self.session_path(session_id)?;
+        let manifest_bytes = self.read_manifest(session_id)?;
+        let manifest: EvidenceManifest =
+            from_json(&manifest_bytes).map_err(|error| StoreError::Manifest(error.to_string()))?;
+        let capture = manifest
+            .captures
+            .iter()
+            .find(|capture| capture.capture_id == capture_id)
+            .ok_or_else(|| StoreError::InvalidPath("capture does not exist".into()))?;
+        let path = session.join(&capture.image.relative_path);
+        ensure_no_symlink_path(&session, &path)?;
+        let bytes = fs::read(path)?;
+        if u64::try_from(bytes.len()).ok() != Some(capture.image.bytes)
+            || sha256_hex(&bytes) != capture.image.sha256
+        {
+            return Err(StoreError::Archive("capture checksum mismatch".into()));
+        }
+        Ok(bytes)
+    }
+
+    /// Atomically publish a revised manifest without changing immutable image
+    /// objects. The manifest is validated before any filesystem mutation.
+    pub fn replace_manifest(&self, session_id: &str, manifest: &[u8]) -> Result<(), StoreError> {
+        validate_manifest(manifest)?;
+        let session = self.session_path(session_id)?;
+        let path = session.join(MANIFEST_FILE);
+        ensure_no_symlink_path(&session, &path)?;
+        let current = session_size(&session)?;
+        let previous = fs::metadata(&path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        let recovery = recover_journal(&session)?;
+        let (journal, _) = journal_line(
+            &recovery,
+            JournalOperation::ManifestPublished,
+            MANIFEST_FILE,
+            manifest,
+        )?;
+        let projected = current
+            .checked_sub(previous)
+            .and_then(|value| value.checked_add(u64::try_from(manifest.len()).ok()?))
+            .and_then(|value| value.checked_add(u64::try_from(journal.len()).ok()?))
+            .ok_or_else(|| StoreError::Quota("bundle size overflows".into()))?;
+        if projected > self.config.max_bundle_bytes {
+            return Err(StoreError::Quota("bundle size limit reached".into()));
+        }
+        atomic_replace(&path, manifest)?;
+        append_journal(
+            &session,
+            JournalOperation::ManifestPublished,
+            MANIFEST_FILE,
+            manifest,
+        )?;
+        Ok(())
     }
 
     pub fn recover(&self, session_id: &str) -> Result<JournalRecovery, StoreError> {
@@ -267,6 +370,25 @@ impl EvidenceStore {
         verify_archive(&archive)?;
         Ok(archive)
     }
+
+    /// Materialise a deterministic export beneath the private state root.
+    /// The caller receives only an opaque relative path; no absolute local
+    /// path is placed in the evidence manifest or protocol response.
+    pub fn export_to_file(&self, session_id: &str) -> Result<ExportArtifact, StoreError> {
+        validate_component(session_id, "session_id")?;
+        let archive = self.export(session_id)?;
+        let exports = self.config.root.join("exports");
+        create_private_dir(&exports)?;
+        let path = exports.join(format!("{session_id}.tar"));
+        ensure_no_symlink_path(&self.config.root, &path)?;
+        atomic_replace(&path, &archive)?;
+        Ok(ExportArtifact {
+            relative_path: format!("exports/{session_id}.tar"),
+            bytes: u64::try_from(archive.len())
+                .map_err(|_| StoreError::Archive("archive length overflows".into()))?,
+            sha256: sha256_hex(&archive),
+        })
+    }
 }
 
 fn validate_component(value: &str, field: &str) -> Result<(), StoreError> {
@@ -284,6 +406,7 @@ fn validate_component(value: &str, field: &str) -> Result<(), StoreError> {
 }
 
 fn create_private_dir(path: &Path) -> Result<(), StoreError> {
+    validate_directory_ancestors(path)?;
     if path.exists() {
         reject_symlink(path)?;
         if !fs::metadata(path)?.is_dir() {
@@ -354,14 +477,48 @@ fn ensure_no_symlink_path(root: &Path, target: &Path) -> Result<(), StoreError> 
             ));
         };
         current.push(value);
-        if current.exists() {
-            reject_symlink(&current)?;
-            let metadata = fs::symlink_metadata(&current)?;
-            if !metadata.is_file() && !metadata.is_dir() {
-                return Err(StoreError::InvalidPath(
-                    "special file is not allowed".into(),
-                ));
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(StoreError::InvalidPath(format!(
+                        "symlink is not allowed: {}",
+                        current.display()
+                    )));
+                }
+                if !metadata.is_file() && !metadata.is_dir() {
+                    return Err(StoreError::InvalidPath(
+                        "special file is not allowed".into(),
+                    ));
+                }
             }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(StoreError::Io(error)),
+        }
+    }
+    Ok(())
+}
+
+fn validate_directory_ancestors(path: &Path) -> Result<(), StoreError> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(StoreError::InvalidPath(format!(
+                        "symlink is not allowed: {}",
+                        current.display()
+                    )));
+                }
+                if !metadata.is_dir() {
+                    return Err(StoreError::InvalidPath(format!(
+                        "path component is not a directory: {}",
+                        current.display()
+                    )));
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(StoreError::Io(error)),
         }
     }
     Ok(())
@@ -486,13 +643,46 @@ fn append_journal(
     {
         return Err(StoreError::Journal("journal path is not normalized".into()));
     }
+    let recovery = recover_journal(session)?;
+    if recovery.ignored_truncated_tail {
+        // A crash may leave a final partial JSON line.  Recovery deliberately
+        // ignores that line; truncate it before appending so the next entry
+        // starts on a fresh line and the journal remains recoverable.
+        let journal_path = session.join(JOURNAL_FILE);
+        ensure_no_symlink_path(session, &journal_path)?;
+        let bytes = fs::read(&journal_path)?;
+        let valid_length = bytes
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .map_or(0, |index| index + 1);
+        let file = OpenOptions::new().write(true).open(&journal_path)?;
+        file.set_len(
+            u64::try_from(valid_length)
+                .map_err(|_| StoreError::Journal("journal offset overflows".into()))?,
+        )?;
+        file.sync_all()?;
+    }
+    let (bytes, _) = journal_line(&recovery, operation, relative_path, content)?;
     let journal_path = session.join(JOURNAL_FILE);
     ensure_no_symlink_path(session, &journal_path)?;
-    let recovery = recover_journal(session)?;
-    let sequence = recovery
-        .entries
-        .last()
-        .map_or(1, |entry| entry.sequence + 1);
+    let mut file = OpenOptions::new().append(true).open(&journal_path)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn journal_line(
+    recovery: &JournalRecovery,
+    operation: JournalOperation,
+    relative_path: &str,
+    content: &[u8],
+) -> Result<(Vec<u8>, String), StoreError> {
+    let sequence = recovery.entries.last().map_or(Ok(1), |entry| {
+        entry
+            .sequence
+            .checked_add(1)
+            .ok_or_else(|| StoreError::Journal("journal sequence overflow".into()))
+    })?;
     let previous_sha256 = recovery
         .entries
         .last()
@@ -513,17 +703,30 @@ fn append_journal(
     let mut bytes =
         serde_json::to_vec(&line).map_err(|error| StoreError::Journal(error.to_string()))?;
     bytes.push(b'\n');
-    let mut file = OpenOptions::new().append(true).open(&journal_path)?;
-    file.write_all(&bytes)?;
-    file.sync_all()?;
-    Ok(())
+    Ok((bytes, line.entry_sha256))
 }
 
 fn recover_journal(session: &Path) -> Result<JournalRecovery, StoreError> {
     let path = session.join(JOURNAL_FILE);
     ensure_no_symlink_path(session, &path)?;
+    let length = fs::metadata(&path)?.len();
+    if length > MAX_JOURNAL_BYTES {
+        return Err(StoreError::Journal(
+            "journal exceeds the recovery bound".into(),
+        ));
+    }
     let mut bytes = Vec::new();
-    File::open(&path)?.read_to_end(&mut bytes)?;
+    File::open(&path)?
+        .take(MAX_JOURNAL_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if u64::try_from(bytes.len())
+        .ok()
+        .is_none_or(|size| size > MAX_JOURNAL_BYTES)
+    {
+        return Err(StoreError::Journal(
+            "journal exceeds the recovery bound".into(),
+        ));
+    }
     let mut entries = Vec::new();
     let mut expected_sequence = 1u64;
     let mut ignored_truncated_tail = false;
@@ -558,7 +761,7 @@ fn recover_journal(session: &Path) -> Result<JournalRecovery, StoreError> {
             .map_err(|error| StoreError::Journal(error.to_string()))?;
         if parsed.body.previous_sha256 != previous_sha256
             || parsed.entry_sha256 != sha256_hex(&body_bytes)
-            || parsed.body.content_sha256.len() != 64
+            || !valid_sha256(&parsed.body.content_sha256)
         {
             return Err(StoreError::Journal(
                 "entry checksum validation failed".into(),
@@ -572,7 +775,9 @@ fn recover_journal(session: &Path) -> Result<JournalRecovery, StoreError> {
             entry_sha256: parsed.entry_sha256.clone(),
         });
         previous_sha256 = parsed.entry_sha256;
-        expected_sequence += 1;
+        expected_sequence = expected_sequence
+            .checked_add(1)
+            .ok_or_else(|| StoreError::Journal("journal sequence overflow".into()))?;
     }
     Ok(JournalRecovery {
         entries,
@@ -594,8 +799,20 @@ fn build_tar(entries: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>, StoreError>
     let mut archive = Vec::new();
     for (path, bytes) in all {
         append_tar_entry(&mut archive, &path, &bytes)?;
+        if u64::try_from(archive.len())
+            .ok()
+            .is_some_and(|size| size > MAX_ARCHIVE_BYTES)
+        {
+            return Err(StoreError::Quota("archive exceeds the bundle limit".into()));
+        }
     }
     archive.extend_from_slice(&[0u8; TAR_BLOCK * 2]);
+    if u64::try_from(archive.len())
+        .ok()
+        .is_some_and(|size| size > MAX_ARCHIVE_BYTES)
+    {
+        return Err(StoreError::Quota("archive exceeds the bundle limit".into()));
+    }
     Ok(archive)
 }
 
@@ -659,7 +876,20 @@ pub fn verify_archive(archive: &[u8]) -> Result<(), StoreError> {
 pub fn extract_verified_archive(archive: &[u8], destination: &Path) -> Result<(), StoreError> {
     let entries = parse_archive_entries(archive)?;
     verify_archive_entries(&entries)?;
-    create_private_dir(destination)?;
+    if destination.exists() {
+        reject_symlink(destination)?;
+        if !destination.is_dir() {
+            return Err(StoreError::InvalidPath(
+                "archive destination is not a directory".into(),
+            ));
+        }
+        if fs::read_dir(destination)?.next().transpose()?.is_some() {
+            return Err(StoreError::Exists(destination.display().to_string()));
+        }
+        set_private_mode(destination, true)?;
+    } else {
+        create_private_dir(destination)?;
+    }
     for (path, bytes) in entries {
         if path == "SHA256SUMS" {
             continue;
@@ -676,23 +906,46 @@ pub fn extract_verified_archive(archive: &[u8], destination: &Path) -> Result<()
 }
 
 fn parse_archive_entries(archive: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, StoreError> {
+    if u64::try_from(archive.len())
+        .ok()
+        .is_none_or(|size| size > MAX_ARCHIVE_BYTES)
+    {
+        return Err(StoreError::Archive(
+            "archive exceeds the bundle limit".into(),
+        ));
+    }
     if !archive.len().is_multiple_of(TAR_BLOCK) {
         return Err(StoreError::Archive("archive is not block aligned".into()));
     }
     let mut entries = BTreeMap::new();
     let mut offset = 0usize;
     let mut zero_blocks = 0usize;
+    let mut terminated_at = None;
     while offset + TAR_BLOCK <= archive.len() {
         let header = &archive[offset..offset + TAR_BLOCK];
         offset += TAR_BLOCK;
         if header.iter().all(|byte| *byte == 0) {
             zero_blocks += 1;
             if zero_blocks == 2 {
+                terminated_at = Some(offset);
                 break;
             }
             continue;
         }
         zero_blocks = 0;
+        let stored_checksum = parse_octal(&header[148..156])?;
+        let mut checksum_header = [0u8; TAR_BLOCK];
+        checksum_header.copy_from_slice(header);
+        checksum_header[148..156].fill(b' ');
+        let actual_checksum: u64 = checksum_header.iter().map(|byte| u64::from(*byte)).sum();
+        if stored_checksum != actual_checksum {
+            return Err(StoreError::Archive(
+                "archive header checksum mismatch".into(),
+            ));
+        }
+        if &header[257..263] != b"ustar\0" || &header[263..265] != b"00" {
+            return Err(StoreError::Archive("archive is not canonical USTAR".into()));
+        }
         let name_end = header[..100]
             .iter()
             .position(|byte| *byte == 0)
@@ -701,6 +954,16 @@ fn parse_archive_entries(archive: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, St
             .iter()
             .position(|byte| *byte == 0)
             .unwrap_or(155);
+        if name_end < 100 && header[name_end + 1..100].iter().any(|byte| *byte != 0)
+            || prefix_end < 155
+                && header[345 + prefix_end + 1..500]
+                    .iter()
+                    .any(|byte| *byte != 0)
+        {
+            return Err(StoreError::Archive(
+                "archive path padding is not canonical".into(),
+            ));
+        }
         let name = std::str::from_utf8(&header[..name_end])
             .map_err(|_| StoreError::Archive("archive path is not UTF-8".into()))?;
         let prefix = std::str::from_utf8(&header[345..345 + prefix_end])
@@ -711,6 +974,11 @@ fn parse_archive_entries(archive: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, St
             format!("{prefix}/{name}")
         };
         validate_archive_path(&path)?;
+        if entries.len() >= MAX_ARCHIVE_ENTRIES {
+            return Err(StoreError::Archive(
+                "archive contains too many entries".into(),
+            ));
+        }
         if header[156] != b'0' && header[156] != 0 {
             return Err(StoreError::Archive(
                 "links and special entries are forbidden".into(),
@@ -740,6 +1008,13 @@ fn parse_archive_entries(archive: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, St
             "archive is missing its terminator".into(),
         ));
     }
+    if let Some(terminated_at) = terminated_at {
+        if archive[terminated_at..].iter().any(|byte| *byte != 0) {
+            return Err(StoreError::Archive(
+                "archive contains data after its terminator".into(),
+            ));
+        }
+    }
     Ok(entries)
 }
 
@@ -755,6 +1030,11 @@ fn verify_archive_entries(entries: &BTreeMap<String, Vec<u8>>) -> Result<(), Sto
             .split_once("  ")
             .ok_or_else(|| StoreError::Archive("malformed SHA256SUMS entry".into()))?;
         validate_archive_path(path)?;
+        if path == "SHA256SUMS" {
+            return Err(StoreError::Archive(
+                "SHA256SUMS must not checksum itself".into(),
+            ));
+        }
         if hash.len() != 64
             || !hash
                 .bytes()
@@ -768,7 +1048,11 @@ fn verify_archive_entries(entries: &BTreeMap<String, Vec<u8>>) -> Result<(), Sto
         if sha256_hex(data) != hash {
             return Err(StoreError::Archive(format!("checksum mismatch for {path}")));
         }
-        referenced.insert(path, ());
+        if referenced.insert(path, ()).is_some() {
+            return Err(StoreError::Archive(
+                "SHA256SUMS contains a duplicate entry".into(),
+            ));
+        }
     }
     if referenced.len() + 1 != entries.len() {
         return Err(StoreError::Archive(
@@ -780,7 +1064,10 @@ fn verify_archive_entries(entries: &BTreeMap<String, Vec<u8>>) -> Result<(), Sto
         .ok_or_else(|| StoreError::Archive("archive is missing manifest.json".into()))?;
     let manifest: EvidenceManifest =
         from_json(manifest).map_err(|error| StoreError::Manifest(error.to_string()))?;
+    let mut expected_paths = BTreeMap::new();
+    expected_paths.insert(MANIFEST_FILE.to_owned(), ());
     for capture in &manifest.captures {
+        expected_paths.insert(capture.image.relative_path.clone(), ());
         let image = entries.get(&capture.image.relative_path).ok_or_else(|| {
             StoreError::Archive(format!(
                 "manifest references missing {}",
@@ -798,7 +1085,23 @@ fn verify_archive_entries(entries: &BTreeMap<String, Vec<u8>>) -> Result<(), Sto
             )));
         }
     }
+    if expected_paths.len() != entries.len().saturating_sub(1)
+        || referenced
+            .keys()
+            .any(|path| !expected_paths.contains_key(*path))
+    {
+        return Err(StoreError::Archive(
+            "archive contains evidence not represented by the manifest".into(),
+        ));
+    }
     Ok(())
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 fn validate_archive_path(path: &str) -> Result<(), StoreError> {
@@ -939,6 +1242,17 @@ mod tests {
             Err(StoreError::Quota(_))
         ));
 
+        let quota_root = temp_root("journal-quota");
+        let mut quota_config = StoreConfig::new(&quota_root);
+        quota_config.max_bundle_bytes = 1;
+        let quota_store = EvidenceStore::new(quota_config).expect("quota store");
+        quota_store.create_session("session-1").expect("session");
+        assert!(matches!(
+            quota_store.publish_capture("session-1", "capture-1", image, &manifest),
+            Err(StoreError::Quota(_))
+        ));
+        let _ = fs::remove_dir_all(quota_root);
+
         #[cfg(unix)]
         {
             let captures = root.join(SESSION_DIR).join("session-1").join(CAPTURE_DIR);
@@ -971,6 +1285,28 @@ mod tests {
         let recovery = store.recover("session-1").expect("recovery");
         assert_eq!(recovery.entries.len(), 1);
         assert!(recovery.ignored_truncated_tail);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn appending_after_a_truncated_tail_restores_journal_recovery() {
+        let image = b"synthetic-png-object";
+        let manifest = manifest_for(image);
+        let root = temp_root("journal-tail-append");
+        let store = EvidenceStore::new(StoreConfig::new(&root)).expect("store");
+        let session = store.create_session("session-1").expect("session");
+        let mut journal = OpenOptions::new()
+            .append(true)
+            .open(session.join(JOURNAL_FILE))
+            .expect("journal");
+        journal.write_all(b"{\"body\":").expect("tail");
+        journal.sync_all().expect("sync");
+        store
+            .publish_capture("session-1", "capture-1", image, &manifest)
+            .expect("capture after recovery");
+        let recovery = store.recover("session-1").expect("recovery");
+        assert_eq!(recovery.entries.len(), 3);
+        assert!(!recovery.ignored_truncated_tail);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1020,5 +1356,70 @@ mod tests {
             Err(StoreError::Exists(_))
         ));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn archive_rejects_header_checksum_and_trailing_data_tampering() {
+        let image = b"synthetic-png-object";
+        let manifest = manifest_for(image);
+        let root = temp_root("archive-tamper");
+        let store = EvidenceStore::new(StoreConfig::new(&root)).expect("store");
+        store.create_session("session-1").expect("session");
+        store
+            .publish_capture("session-1", "capture-1", image, &manifest)
+            .expect("capture");
+
+        let mut checksum_bad = store.export("session-1").expect("archive");
+        checksum_bad[0] ^= 1;
+        assert!(verify_archive(&checksum_bad).is_err());
+
+        let mut trailing = store.export("session-1").expect("archive");
+        trailing.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        trailing.resize(trailing.len().div_ceil(TAR_BLOCK) * TAR_BLOCK, 0);
+        assert!(verify_archive(&trailing).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn archive_rejects_declared_evidence_not_represented_by_manifest() {
+        let image = b"synthetic-png-object";
+        let manifest = manifest_for(image);
+        let root = temp_root("archive-extra");
+        let store = EvidenceStore::new(StoreConfig::new(&root)).expect("store");
+        store.create_session("session-1").expect("session");
+        store
+            .publish_capture("session-1", "capture-1", image, &manifest)
+            .expect("capture");
+        let archive = store.export("session-1").expect("archive");
+        let mut entries = parse_archive_entries(&archive).expect("entries");
+        entries.insert("extra.txt".into(), b"undeclared".to_vec());
+        let mut sums = String::new();
+        for (path, bytes) in &entries {
+            if path != "SHA256SUMS" {
+                sums.push_str(&sha256_hex(bytes));
+                sums.push_str("  ");
+                sums.push_str(path);
+                sums.push('\n');
+            }
+        }
+        entries.insert("SHA256SUMS".into(), sums.into_bytes());
+        assert!(verify_archive_entries(&entries).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dangling_symlink_components_are_rejected() {
+        #[cfg(unix)]
+        {
+            let root = temp_root("dangling");
+            let outside = root.join("outside");
+            fs::create_dir_all(&root).expect("root");
+            std::os::unix::fs::symlink(&outside, root.join("sessions")).expect("dangling symlink");
+            assert!(matches!(
+                EvidenceStore::new(StoreConfig::new(&root)),
+                Err(StoreError::InvalidPath(_))
+            ));
+            let _ = fs::remove_dir_all(root);
+        }
     }
 }

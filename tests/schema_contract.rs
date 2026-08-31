@@ -27,6 +27,7 @@ fn valid_capture(id: &str) -> CaptureRecord {
         capture_id: id.to_owned(),
         capture_type: CaptureType::Window,
         captured_at: 1_700_000_000_000,
+        stale: false,
         image: ImageEvidence {
             relative_path: format!("captures/{id}.png"),
             bytes: 128,
@@ -299,4 +300,71 @@ fn finding_source_is_closed_and_not_implicitly_agent_authority() {
     let source = FindingSource::Deterministic;
     let json = serde_json::to_string(&source).expect("enum serializes");
     assert_eq!(json, "\"deterministic\"");
+}
+
+#[test]
+fn review_and_handoff_provenance_kinds_are_explicit() {
+    let mut request = surfacecheck_core::AgentReviewRequest {
+        schema_version: SCHEMA_VERSION,
+        review_id: "review-1".to_owned(),
+        capture_id: "capture-1".to_owned(),
+        prompt: "review".to_owned(),
+        evidence: vec![valid_evidence("capture-1")],
+        consent: surfacecheck_core::ConsentRecord {
+            acknowledged: true,
+            local_only: true,
+            disclosure: "Local review only.".to_owned(),
+        },
+        provenance: valid_provenance(ProvenanceKind::LocalCapture),
+    };
+    assert!(request.validate().is_err());
+    request.provenance.kind = ProvenanceKind::AgentReview;
+    assert!(request.validate().is_ok());
+
+    let mut defect = surfacecheck_core::DefectEnvelope {
+        defect_id: "defect-1".to_owned(),
+        finding_id: "finding-1".to_owned(),
+        finding_source: FindingSource::Agent,
+        capture_id: "capture-1".to_owned(),
+        category: AgentCategory::Layout,
+        severity: Severity::Medium,
+        explanation: "Visible concern.".to_owned(),
+        evidence: vec![valid_evidence("capture-1")],
+        suggested_next_action: "Inspect it.".to_owned(),
+        provenance: valid_provenance(ProvenanceKind::LocalCapture),
+    };
+    assert!(defect.validate().is_err());
+    defect.provenance.kind = ProvenanceKind::Handoff;
+    assert!(defect.validate().is_ok());
+}
+
+#[test]
+fn interactive_capture_requests_default_optional_fields() {
+    let window: surfacecheck_core::CaptureWindowRequest =
+        serde_json::from_slice(br#"{}"#).expect("window defaults");
+    assert!(window.session_id.is_none());
+    assert!(window.user_note.is_none());
+    let region: surfacecheck_core::CaptureRegionRequest =
+        serde_json::from_slice(br#"{}"#).expect("region defaults");
+    assert!(region.region.is_none());
+    assert!(region.validate().is_ok());
+}
+
+#[test]
+fn provenance_and_tool_versions_reject_paths_and_urls() {
+    let mut provenance = valid_provenance(ProvenanceKind::LocalCapture);
+    provenance.producer_commit = "/tmp/secret".to_owned();
+    assert!(provenance.validate().is_err());
+    let mut tool = ToolVersion {
+        name: ToolName::Grim,
+        version: "https://example.invalid".to_owned(),
+    };
+    assert!(tool.validate().is_err());
+    tool.version = "grim 1.5.0".to_owned();
+    assert!(tool.validate().is_ok());
+
+    let application = surfacecheck_core::ApplicationIdentity {
+        redacted_alias: "/home/user/secret".to_owned(),
+    };
+    assert!(application.validate().is_err());
 }

@@ -1,0 +1,79 @@
+.TH SURFACECHECK 1 "2026-08-31" "SurfaceCheck 0.1" "User Commands"
+.SH NAME
+surfacecheck \- local, evidence-backed Omarchy surface inspection
+.SH SYNOPSIS
+.B surfacecheck
+.I command
+.B --json
+.RI [ options ]
+.SH DESCRIPTION
+Every invocation requires exactly one
+.B --json
+flag and emits one bounded schemaVersion 1 JSON envelope. Captures are owned
+by the optional local
+.B surfacecheckd
+user service. A missing compositor, tool, adapter, or service is reported as
+an explicit status; it is never represented as an empty successful capture.
+.SH COMMANDS
+.TP
+.B status
+Report daemon, capture-tool, agent, handoff, and quota state.
+.TP
+.B service
+Query the authenticated local service directly.
+.TP
+.B capture window | capture region
+Capture the active window or launch the bounded region selector.
+.TP
+.B capture application ADDRESS
+Capture the exact Hyprland hexadecimal window address.
+.TP
+.B review CAPTURE_ID
+Run deterministic review. Add
+.B --agent --consent-local
+for an explicit local agent review.
+.TP
+.B compare BEFORE_ID AFTER_ID
+Compute before/after pixel and perceptual metrics.
+.TP
+.B select-before-after SESSION BEFORE_ID AFTER_ID
+Persist the comparison relationship in the local manifest.
+.TP
+.B annotate SESSION --note NOTE
+Replace the local user note.
+.TP
+.B export SESSION
+Write a deterministic local USTAR evidence archive.
+.TP
+.B handoff premonition FINDING_ID --consent-external
+Request an explicitly consented versioned Premonition handoff.
+.TP
+.B cancel OPERATION_ID GENERATION
+Cancel only the matching active operation generation.
+.SH OPTIONS
+.TP
+.B --session SESSION
+Use a bounded opaque session identifier.
+.TP
+.B --note NOTE
+Attach a bounded plain-text note to a capture or annotation.
+.TP
+.B --alias ALIAS
+Supply an optional already-redacted application label.
+.TP
+.B --json
+Required exactly once.
+.SH EXIT STATUS
+0 means the operation succeeded. 1 is an internal or tool error, 2 is an
+invalid request or evidence, 3 means the service or adapter is unavailable, 4
+means a required capture tool is missing, 5 means the user cancelled, 6 means
+another operation is busy, and 7 means the bounded operation timed out.  The
+JSON envelope remains the authoritative detailed status.
+.SH FILES
+The service socket is beneath
+.B $XDG_RUNTIME_DIR/surfacecheck/
+and evidence is beneath the private XDG state directory. Responses expose
+only opaque relative export paths.
+.SH SEE ALSO
+.BR surfacecheckd (1),
+.BR systemctl (1)

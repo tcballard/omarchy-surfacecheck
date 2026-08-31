@@ -16,7 +16,14 @@ use std::sync::{
 };
 use surfacecheck_core::MAX_JSON_FRAME_BYTES;
 
+mod runtime;
+
+pub use runtime::{run_foreground, RuntimeService};
+
 pub const DEFAULT_SOCKET_NAME: &str = "surfacecheck.sock";
+/// A bounded worker cap keeps untrusted local clients from creating an
+/// unbounded thread queue.  Operations themselves remain single-flight.
+pub const MAX_CLIENTS: usize = 8;
 
 #[derive(Debug)]
 pub enum ServiceError {
@@ -74,7 +81,11 @@ pub struct RuntimePaths {
 impl RuntimePaths {
     pub fn new(root: impl Into<PathBuf>) -> Result<Self, ServiceError> {
         let root = root.into();
-        if root.as_os_str().is_empty() || root.is_file() || is_symlink(&root) {
+        if root.as_os_str().is_empty()
+            || root.is_file()
+            || is_symlink(&root)
+            || !safe_directory_ancestors(&root)?
+        {
             return Err(ServiceError::InvalidRuntimePath);
         }
         let socket = root.join(DEFAULT_SOCKET_NAME);
@@ -251,7 +262,8 @@ impl OperationLease {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BusyOperation {
     pub operation_id: String,
     pub generation: u64,
@@ -347,6 +359,23 @@ fn is_symlink(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn safe_directory_ancestors(path: &Path) -> Result<bool, ServiceError> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    return Ok(false);
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(ServiceError::Io(error)),
+        }
+    }
+    Ok(true)
+}
+
 #[cfg(unix)]
 fn is_socket(path: &Path) -> bool {
     use std::os::unix::fs::FileTypeExt;
@@ -434,6 +463,24 @@ mod tests {
             paths.bind(),
             Err(ServiceError::InvalidRuntimePath)
         ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_runtime_rejects_a_symlinked_ancestor() {
+        let root =
+            std::env::temp_dir().join(format!("surfacecheck-runtime-link-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("root");
+        let outside = root.join("outside");
+        fs::create_dir(&outside).expect("outside");
+        let link = root.join("link");
+        std::os::unix::fs::symlink(&outside, &link).expect("link");
+        assert_eq!(
+            RuntimePaths::new(link.join("runtime")).expect_err("symlink ancestor"),
+            ServiceError::InvalidRuntimePath
+        );
         let _ = fs::remove_dir_all(root);
     }
 }

@@ -7,6 +7,26 @@ clean checkout with the committed Rust toolchain and lockfile:
 cargo build --workspace --locked --release
 ```
 
+The command reference and Bash completion are shipped as
+`docs/surfacecheck.1` and `docs/surfacecheck.bash`; install them only through
+your normal local package policy.
+
+For a persistent foreground-capable service, install the two release binaries
+under `~/.local/bin`, copy `systemd/surfacecheckd.service` to
+`~/.config/systemd/user/`, then run:
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now surfacecheckd.service
+surfacecheck status --json
+```
+
+The unit is local-only (`AF_UNIX`), creates a private runtime/state directory
+and has no network address family. It still receives the compositor's Wayland
+socket through the user runtime directory. If a user service is not desired,
+the CLI reports the runtime as unavailable and never pretends that evidence
+was stored.
+
 To produce an exact-object package, pass an immutable commit (or `HEAD`) to
 `scripts/package.sh`. It creates a source archive, checksum sidecar and commit
 marker, then builds the extracted tree. `scripts/verify_package.sh` verifies
