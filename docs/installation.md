@@ -1,15 +1,25 @@
 # Installation and provenance
 
-SurfaceCheck is currently a source-built v0.1 implementation. Build from a
-clean checkout with the committed Rust toolchain and lockfile:
+SurfaceCheck is currently a source-built v0.1 implementation. On Omarchy,
+install the repository as a disabled root plugin, then run the bundled user
+installer from the checked-out plugin directory:
+
+```sh
+omarchy plugin add https://github.com/tcballard/omarchy-surfacecheck.git --yes
+~/.config/omarchy/plugins/tcballard.surfacecheck/scripts/install-user.sh
+omarchy plugin enable tcballard.surfacecheck
+```
+
+The installer builds from the committed Rust toolchain and lockfile. The
+equivalent build command is:
 
 ```sh
 cargo build --workspace --locked --release
 ```
 
 The command reference and Bash completion are shipped as
-`docs/surfacecheck.1` and `docs/surfacecheck.bash`; install them only through
-your normal local package policy.
+`docs/surfacecheck.1` and `docs/surfacecheck.bash`. The bundled installer puts
+them under the user's XDG data directory.
 
 For a persistent foreground-capable service, install the two release binaries
 under `~/.local/bin`, copy `systemd/surfacecheckd.service` to
@@ -20,6 +30,11 @@ systemctl --user daemon-reload
 systemctl --user enable --now surfacecheckd.service
 surfacecheck status --json
 ```
+
+The bundled installer performs those user-scoped steps without sudo and does
+not enable the shell plugin. It refuses non-Linux and root execution, validates
+the root plugin before building, and fails if service startup or the final JSON
+status probe fails.
 
 The unit is local-only (`AF_UNIX`), creates a private runtime/state directory
 and has no network address family. It still receives the compositor's Wayland
@@ -43,3 +58,14 @@ object is available.
 This environment is not a live Omarchy session. Do not interpret a successful
 source build as acceptance, marketplace approval, release publication or
 Premonition interoperability.
+
+## Update and removal
+
+After `omarchy plugin update tcballard.surfacecheck`, rerun
+`scripts/install-user.sh` from the installed checkout so the native binaries
+match the QML source.
+
+Run `scripts/uninstall-user.sh` before `omarchy plugin remove
+tcballard.surfacecheck`. The uninstaller stops and removes the user service,
+binaries, man page and completion. It deliberately preserves private evidence
+under `${XDG_STATE_HOME:-$HOME/.local/state}/surfacecheck`.

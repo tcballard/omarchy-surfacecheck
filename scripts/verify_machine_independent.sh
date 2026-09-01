@@ -6,7 +6,8 @@ cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo doc --workspace --no-deps --locked
 scripts/check_dependencies.sh
-python3 scripts/validate_plugin.py omarchy-plugin
+python3 scripts/validate_plugin.py .
+scripts/check_install_bundle.sh
 
 package_dir="$(mktemp -d)"
 trap 'rm -rf "$package_dir"' EXIT

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 readonly OMARCHY_QUATTRO_SHA="981274b20af8e85c09845071ac33c6230909f119"
-readonly PLUGIN_DIR="${1:-omarchy-plugin}"
+readonly PLUGIN_DIR="${1:-.}"
 readonly CHECKOUT="${OMARCHY_CHECKOUT:-${2:-}}"
 
 if [[ -z "$CHECKOUT" ]]; then

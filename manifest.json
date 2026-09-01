@@ -7,9 +7,9 @@
   "description": "Local, evidence-backed visual inspection for Omarchy surfaces.",
   "kinds": ["menu", "panel", "overlay"],
   "entryPoints": {
-    "menu": "qml/Menu.qml",
-    "panel": "qml/Panel.qml",
-    "overlay": "qml/Overlay.qml"
+    "menu": "omarchy-plugin/qml/Menu.qml",
+    "panel": "omarchy-plugin/qml/Panel.qml",
+    "overlay": "omarchy-plugin/qml/Overlay.qml"
   },
   "keepLoaded": true
 }

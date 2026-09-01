@@ -47,5 +47,6 @@ if not isinstance(sbom.get("components"), list) or not sbom["components"]:
 PY
 cargo test --manifest-path "$source_dir/Cargo.toml" --workspace --locked
 (cd "$source_dir" && scripts/check_dependencies.sh)
-python3 "$source_dir/scripts/validate_plugin.py" "$source_dir/omarchy-plugin"
+python3 "$source_dir/scripts/validate_plugin.py" "$source_dir"
+(cd "$source_dir" && scripts/check_install_bundle.sh)
 printf 'verified package from exact commit %s\n' "$expected"
