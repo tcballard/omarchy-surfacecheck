@@ -42,3 +42,13 @@ Append-only implementation evidence for Omarchy SurfaceCheck.
   warnings-denied Clippy, rustdoc and static plugin checks passed locally.
 - Live gate unchanged: issue #15 is not run or closed because this workspace
   has no current Omarchy Quattro compositor, Quickshell or capture-tool matrix.
+
+## 2026-09-01 — marketplace install bundle
+
+- Promoted the plugin manifest to the repository root so the public repository is one directly discoverable Omarchy plugin; QML remains thin under `omarchy-plugin/qml/`.
+- Added the declared MIT licence and complete manual install, update and removal path for the locked native binaries, systemd user service, man page and Bash completion.
+- Removal preserves private evidence by default and leaves shell-plugin removal to Omarchy's own plugin command.
+- Added an isolated lifecycle test that proves the installed file set, service operations and evidence-preservation boundary without changing the operator's real home directory.
+- Static verification passed: formatting, dependency policy, Bash syntax, ShellCheck for new lifecycle scripts, local root-plugin validation, the exact pinned upstream validator, the v4.0.2 upstream validator, and the isolated install/removal lifecycle.
+- Rust tests remain a Linux CI gate: this macOS host cannot compile the existing Linux `SO_PEERCRED` service implementation. Live issue #15 also remains open.
+- No marketplace submission, release, tag or evidence upload was performed.

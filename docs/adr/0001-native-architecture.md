@@ -86,7 +86,7 @@ The dependency direction is deliberately one-way:
 3. `surfacecheck-review` owns deterministic review, explicit agent review, and the mockable defect-handoff interfaces.
 4. `surfacecheck-service` owns the single-flight state machine, evidence sessions, recovery journal, subprocess cancellation, and authenticated local IPC.
 5. `surfacecheck-cli` exposes the stable command surface and contains no alternate evidence mutation path.
-6. `omarchy-plugin/` contains the schema-version-1 manifest and thin QML surfaces.
+6. The repository-root manifest and `omarchy-plugin/` contain the schema-version-1 plugin and thin QML surfaces.
 
 No runtime-loaded Rust plugins or shared libraries are allowed.
 

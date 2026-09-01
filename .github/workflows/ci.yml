@@ -27,7 +27,9 @@ jobs:
       - name: Check dependency policy
         run: scripts/check_dependencies.sh
       - name: Validate plugin contract
-        run: python3 scripts/validate_plugin.py omarchy-plugin
+        run: python3 scripts/validate_plugin.py .
+      - name: Verify install and removal lifecycle
+        run: scripts/check_install_bundle.sh
       - name: Scan source for accidental secrets
         run: |
           ! grep -RInE --exclude-dir=.git --exclude-dir=target \

@@ -6,8 +6,58 @@ deterministically, and only then request an optional agent review. It is
 infrastructure for evaluating Omarchy surfaces, not a hosted screenshot or
 test-management service.
 
-The current implementation is being delivered on [PR #17](https://github.com/tcballard/omarchy-surfacecheck/pull/17).
+The v0.1 implementation was delivered on [PR #17](https://github.com/tcballard/omarchy-surfacecheck/pull/17).
 It is machine-independent and does not claim live Omarchy acceptance.
+
+## Install on Omarchy Quattro
+
+SurfaceCheck is a root Omarchy plugin repository with a native Rust CLI and
+user service. It therefore uses a manual marketplace installation rather than
+the standard QML-only install path.
+
+Requirements:
+
+- Omarchy Quattro with Quickshell, Hyprland, `grim`, `slurp` and `hyprctl`;
+- Rust and Cargo for the locked source build;
+- systemd user services; and
+- network access during the first Cargo build when locked crates are not
+  already cached.
+
+Add the repository without enabling it, install the native runtime from that
+exact checkout, then enable the plugin:
+
+```sh
+omarchy plugin add https://github.com/tcballard/omarchy-surfacecheck.git --yes
+~/.config/omarchy/plugins/tcballard.surfacecheck/scripts/install-user.sh
+omarchy plugin enable tcballard.surfacecheck
+```
+
+The installer validates the root plugin, builds the workspace with
+`--locked --release`, installs `surfacecheck` and `surfacecheckd` under
+`~/.local/bin`, installs the user service, man page and Bash completion, starts
+the service, and prints the real JSON capability status. It does not enable the
+plugin or delete evidence.
+
+After a plugin update, rebuild and reinstall the native runtime from the new
+checked-out source:
+
+```sh
+omarchy plugin update tcballard.surfacecheck
+~/.config/omarchy/plugins/tcballard.surfacecheck/scripts/install-user.sh
+```
+
+To remove SurfaceCheck, uninstall the native runtime first and then remove the
+shell plugin:
+
+```sh
+~/.config/omarchy/plugins/tcballard.surfacecheck/scripts/uninstall-user.sh
+omarchy plugin remove tcballard.surfacecheck
+```
+
+Removal deliberately preserves local evidence under
+`${XDG_STATE_HOME:-$HOME/.local/state}/surfacecheck`. Review and remove that
+private directory separately using your normal filesystem policy if it is no
+longer required.
 
 ## Quick start
 
@@ -47,10 +97,10 @@ Only the daemon mutates evidence. The direct capture fallback is deliberately
 marked `stored: false` and exists for honest capability diagnostics when no
 user service is running.
 
-The source-only plugin can be checked with:
+The root plugin can be checked with:
 
 ```sh
-python3 scripts/validate_plugin.py omarchy-plugin
+python3 scripts/validate_plugin.py .
 ```
 
 The exact official Quattro validator is invoked only when
@@ -84,7 +134,7 @@ OMARCHY_CHECKOUT=/path/to/omarchy scripts/validate_omarchy_pinned.sh
 - `surfacecheck-service` — authenticated same-UID Unix IPC, framing and
   single-flight cancellation state.
 - `surfacecheck-cli` — strict JSON command facade.
-- `omarchy-plugin/` — thin Quattro menu, overlay and review panel; no image,
+- root `manifest.json` plus `omarchy-plugin/` — thin Quattro menu, overlay and review panel; no image,
   filesystem, agent or archive logic.
 
 ## Privacy and evidence
@@ -112,3 +162,10 @@ until it is run on current Omarchy Quattro hardware.
 The dependency and exact-object rules are recorded in
 [`docs/supply-chain.md`](docs/supply-chain.md); no package or evidence is
 uploaded by the repository tooling.
+
+Marketplace packaging and its manual-installation boundary are recorded in
+[`docs/marketplace.md`](docs/marketplace.md).
+
+## Licence
+
+SurfaceCheck is available under the MIT License. See [`LICENSE`](LICENSE).
